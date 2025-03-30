@@ -1,0 +1,818 @@
+#include "ITRI_APP.h"
+
+#define sqr(x) ((x) * (x))
+#define WHEEL_LEFT					0
+#define WHEEL_RIGHT					1
+#define MODE_MANUAL					0
+#define MODE_AUTO					1
+#define MODE_NUMBER_INDEX_ONE		1
+#define MODE_NUMBER_INDEX_TWO		2
+#define MODE_NUMBER_INDEX_THREE		3
+#define CIRCLE_DIAMETER				84.82
+#define MATH_PI 					3.14159265
+#define ADVALUE_THROTTLE_RPM_SCALE	100
+#define ADVALUE_THROTTLE_THRESHOLD	2600
+#define ADVALUE_STEERING_THRESHOLD	100
+#define RPM_RANGE					30
+#define AXEL_LENGTH					46.0 // [cm]
+#define MAXIMUM_RPM 				50
+#define MINIMUM_RPM 				5
+#define WHEEL_DIAMETER				27.0
+#define SECOND_TO_MINUTE			60
+#define RECORD_SIZE					400
+#define ALLOWED_DISTANCE_ERROR      5 // [cm]
+#define ALLOWED_ANGLE_ERROR         0.0174533 // [radians]
+typedef struct
+{
+	float x;
+	float y;
+	float theta;
+} MyPointPlane;
+
+MyPointPlane m_ptStart = {-20.000, 0.000, 0};
+MyPointPlane m_ptOutput = {0, 0, 0};
+MyPointPlane m_ptDesired = {0, 0, 0};
+// Goals
+int TotalNumberofGoals = 232;
+int CurrenGoal = -1;
+
+CITRICar ITRICar;
+int car;
+double dSpeedCmd;
+float dRPM_Left = -10.0;
+float dRPM_Right = -10.0;
+/////////////////////////////////////////////////////////// Rohit
+float fLeftWheelVelocity = 0;
+float fRightWheelVelocity = 0;
+float PreviouLVal = 0;
+float PreviouRVal = 0;
+float SamplingTime = 0;
+bool TakeControl = false;
+bool bPositionControl = false;
+bool bOrientationControl = false;
+float Integral_e_theta = 0;
+float v_Comm = 10.0 * MATH_PI * WHEEL_DIAMETER / SECOND_TO_MINUTE;
+float w_Comm = 0;
+bool GoalReached = false;
+PIDController VCLeftWheel = {30, 0.5, 3.0, 50};
+PIDController VCRightWheel = {30, 0.5, 3.0, 50};
+
+bool bPrintComplete = false;
+int PrintCounter = 0;
+#define MAX_POINTS 	240
+
+MyPointPlane m_ptPathData[MAX_POINTS]=
+{
+{0.00,-0.00,0.00},
+{7.50,-0.00,0.00},
+{15.00,-0.00,0.00},
+{22.50,-0.00,0.00},
+{30.00,-0.00,0.00},
+{37.50,-0.00,0.00},
+{45.00,-0.00,0.00},
+{52.50,-0.00,0.00},
+{60.00,-0.00,0.00},
+{67.50,-0.00,0.00},
+{75.00,-0.00,0.00},
+{82.50,-0.00,0.00},
+{90.00,-0.00,0.00},
+{97.41,-0.00,0.00},
+{102.78,0.04,0.00},
+{107.77,0.30,0.00},
+{112.74,0.82,0.00},
+{117.68,1.58,0.00},
+{122.58,2.58,0.00},
+{127.42,3.83,0.00},
+{132.19,5.32,0.00},
+{136.89,7.05,0.00},
+{141.48,9.01,0.00},
+{145.98,11.20,0.00},
+{150.36,13.61,0.00},
+{154.62,16.23,0.00},
+{158.73,19.07,0.00},
+{162.71,22.10,0.00},
+{166.52,25.33,0.00},
+{170.17,28.75,0.00},
+{173.64,32.35,0.00},
+{176.93,36.11,0.00},
+{180.03,40.04,0.00},
+{182.93,44.11,0.00},
+{185.62,48.33,0.00},
+{188.09,52.67,0.00},
+{190.35,57.13,0.00},
+{192.38,61.70,0.00},
+{194.17,66.37,0.00},
+{195.74,71.12,0.00},
+{197.06,75.94,0.00},
+{198.14,80.82,0.00},
+{198.98,85.75,0.00},
+{199.57,90.71,0.00},
+{199.91,95.70,0.00},
+{200.00,100.70,0.00},
+{199.84,105.70,0.00},
+{199.43,110.68,0.00},
+{198.77,115.63,0.00},
+{197.87,120.55,0.00},
+{196.72,125.42,0.00},
+{195.33,130.22,0.00},
+{193.70,134.94,0.00},
+{191.83,139.58,0.00},
+{189.74,144.12,0.00},
+{187.42,148.55,0.00},
+{184.89,152.86,0.00},
+{182.14,157.04,0.00},
+{179.18,161.07,0.00},
+{176.03,164.95,0.00},
+{172.69,168.67,0.00},
+{169.17,172.22,0.00},
+{165.47,175.59,0.00},
+{161.61,178.76,0.00},
+{157.60,181.75,0.00},
+{153.44,184.52,0.00},
+{149.15,187.09,0.00},
+{144.74,189.44,0.00},
+{140.21,191.56,0.00},
+{135.58,193.45,0.00},
+{130.87,195.12,0.00},
+{126.08,196.54,0.00},
+{121.22,197.72,0.00},
+{116.31,198.66,0.00},
+{111.36,199.35,0.00},
+{106.38,199.80,0.00},
+{101.38,199.99,0.00},
+{96.38,199.93,0.00},
+{91.39,199.63,0.00},
+{86.42,199.07,0.00},
+{81.49,198.27,0.00},
+{76.60,197.22,0.00},
+{71.77,195.93,0.00},
+{67.01,194.40,0.00},
+{62.33,192.64,0.00},
+{57.75,190.64,0.00},
+{53.27,188.41,0.00},
+{48.91,185.97,0.00},
+{44.68,183.31,0.00},
+{40.59,180.44,0.00},
+{36.64,177.37,0.00},
+{32.85,174.10,0.00},
+{29.23,170.66,0.00},
+{25.79,167.03,0.00},
+{22.53,163.24,0.00},
+{19.47,159.29,0.00},
+{16.61,155.19,0.00},
+{13.95,150.95,0.00},
+{11.51,146.59,0.00},
+{9.30,142.11,0.00},
+{7.31,137.52,0.00},
+{5.55,132.84,0.00},
+{4.02,128.08,0.00},
+{2.74,123.25,0.00},
+{1.70,118.36,0.00},
+{0.90,113.42,0.00},
+{0.36,108.45,0.00},
+{0.06,103.46,0.00},
+{-0.00,98.28,0.00},
+{-0.00,91.03,0.00},
+{-0.00,83.53,0.00},
+{-0.00,76.03,0.00},
+{-0.00,68.53,0.00},
+{-0.00,61.03,0.00},
+{-0.00,53.53,0.00},
+{-0.00,46.03,0.00},
+{-0.00,38.53,0.00},
+{-0.00,31.03,0.00},
+{-0.00,23.53,0.00},
+{-0.00,16.03,0.00},
+{0.00,8.53,0.00},
+{0.00,1.03,0.00},
+{0.00,-6.47,0.00},
+{0.00,-13.97,0.00},
+{0.00,-21.47,0.00},
+{0.00,-28.97,0.00},
+{0.00,-36.47,0.00},
+{0.00,-43.97,0.00},
+{0.00,-51.47,0.00},
+{0.00,-58.97,0.00},
+{0.00,-66.47,0.00},
+{0.00,-73.97,0.00},
+{0.00,-81.47,0.00},
+{0.00,-88.97,0.00},
+{0.00,-96.46,0.00},
+{-0.02,-102.09,0.00},
+{-0.25,-107.09,0.00},
+{-0.73,-112.06,0.00},
+{-1.46,-117.01,0.00},
+{-2.43,-121.92,0.00},
+{-3.65,-126.76,0.00},
+{-5.11,-131.55,0.00},
+{-6.80,-136.25,0.00},
+{-8.73,-140.86,0.00},
+{-10.89,-145.37,0.00},
+{-13.27,-149.77,0.00},
+{-15.86,-154.04,0.00},
+{-18.67,-158.18,0.00},
+{-21.68,-162.17,0.00},
+{-24.88,-166.01,0.00},
+{-28.27,-169.68,0.00},
+{-31.85,-173.18,0.00},
+{-35.59,-176.49,0.00},
+{-39.49,-179.62,0.00},
+{-43.55,-182.54,0.00},
+{-47.74,-185.26,0.00},
+{-52.07,-187.77,0.00},
+{-56.52,-190.05,0.00},
+{-61.07,-192.11,0.00},
+{-65.72,-193.94,0.00},
+{-70.46,-195.54,0.00},
+{-75.27,-196.89,0.00},
+{-80.15,-198.01,0.00},
+{-85.07,-198.88,0.00},
+{-90.03,-199.50,0.00},
+{-95.02,-199.88,0.00},
+{-100.01,-200.00,0.00},
+{-105.01,-199.87,0.00},
+{-110.00,-199.50,0.00},
+{-114.96,-198.87,0.00},
+{-119.88,-198.00,0.00},
+{-124.75,-196.89,0.00},
+{-129.57,-195.53,0.00},
+{-134.30,-193.93,0.00},
+{-138.96,-192.10,0.00},
+{-143.51,-190.04,0.00},
+{-147.96,-187.75,0.00},
+{-152.28,-185.24,0.00},
+{-156.48,-182.53,0.00},
+{-160.53,-179.60,0.00},
+{-164.43,-176.47,0.00},
+{-168.17,-173.16,0.00},
+{-171.75,-169.66,0.00},
+{-175.14,-165.99,0.00},
+{-178.34,-162.15,0.00},
+{-181.35,-158.16,0.00},
+{-184.16,-154.02,0.00},
+{-186.75,-149.74,0.00},
+{-189.13,-145.35,0.00},
+{-191.28,-140.84,0.00},
+{-193.21,-136.22,0.00},
+{-194.90,-131.52,0.00},
+{-196.36,-126.74,0.00},
+{-197.58,-121.89,0.00},
+{-198.55,-116.98,0.00},
+{-199.27,-112.04,0.00},
+{-199.75,-107.06,0.00},
+{-199.98,-102.06,0.00},
+{-199.96,-97.07,0.00},
+{-199.69,-92.07,0.00},
+{-199.16,-87.10,0.00},
+{-198.40,-82.16,0.00},
+{-197.38,-77.27,0.00},
+{-196.12,-72.43,0.00},
+{-194.63,-67.66,0.00},
+{-192.89,-62.97,0.00},
+{-190.92,-58.37,0.00},
+{-188.73,-53.88,0.00},
+{-186.31,-49.50,0.00},
+{-183.68,-45.25,0.00},
+{-180.84,-41.14,0.00},
+{-177.80,-37.17,0.00},
+{-174.56,-33.36,0.00},
+{-171.14,-29.72,0.00},
+{-167.54,-26.25,0.00},
+{-163.77,-22.97,0.00},
+{-159.84,-19.88,0.00},
+{-155.76,-16.99,0.00},
+{-151.54,-14.30,0.00},
+{-147.19,-11.83,0.00},
+{-142.72,-9.59,0.00},
+{-138.15,-7.56,0.00},
+{-133.48,-5.77,0.00},
+{-128.73,-4.22,0.00},
+{-123.91,-2.90,0.00},
+{-119.03,-1.83,0.00},
+{-114.10,-1.00,0.00},
+{-109.13,-0.42,0.00},
+{-104.14,-0.09,0.00},
+{-99.09,0.00,0.00},
+{-92.05,0.00,0.00},
+{-50.55,0.00,0.00}
+};
+
+
+/////////////////////////////////////////////////////////// Rohit
+void ChangeGoal()
+{
+	CurrenGoal++;
+	m_ptDesired = m_ptPathData[CurrenGoal];
+}
+
+MyPointPlane Difference(MyPointPlane pt1, MyPointPlane pt2)
+{
+	MyPointPlane pt = {pt1.x - pt2.x, pt1.y - pt2.y, pt1.theta - pt2.theta};
+	return pt;
+}
+
+float Mod(MyPointPlane Vec)
+{
+	float ModValue = sqr(Vec.x) + sqr(Vec.y);
+	return sqrt(ModValue);
+}
+
+float DotXY(MyPointPlane pt1, MyPointPlane pt2)
+{
+	return pt1.x * pt2.x +  pt1.y * pt2.y;
+}
+
+float CrossProductXY(MyPointPlane pt1, MyPointPlane pt2)
+{
+	return pt1.x * pt2.y -  pt1.y * pt2.x;
+}
+
+float DifferenceNorm2(MyPointPlane pt1, MyPointPlane pt2)
+{
+	MyPointPlane pt = Difference(pt1, pt2);
+	return sqr(pt.x) + sqr(pt.y);
+}
+
+float FindAngleBetweenVectorsGivenPoints(MyPointPlane B, MyPointPlane D, bool* RightWheelMore)
+{
+	MyPointPlane Vec1 = Difference(B, m_ptOutput);
+	MyPointPlane Vec2 = Difference(D, m_ptOutput);
+	float dXY = DotXY(Vec1, Vec2);
+	float angle_between_lines = acos(dXY/ (Mod(Vec1) * Mod(Vec2))); 
+	float determinant = CrossProductXY(Vec1, Vec2);
+	if (determinant == 0)
+	{
+		if (angle_between_lines == 0 ||	fabs(angle_between_lines - PI) <= 1e-3)
+		{
+			*RightWheelMore = true;
+			return angle_between_lines == 0 ? 0 : angle_between_lines;
+		}	
+		return angle_between_lines;	
+	}	
+	*RightWheelMore = determinant > 0 == angle_between_lines < PI;
+	return *RightWheelMore == determinant > 0 ? angle_between_lines : 2 * PI - angle_between_lines;
+}
+
+float Get_eTheta()
+{
+	float theta_m = atan2(m_ptDesired.y - m_ptOutput.y, m_ptDesired.x - m_ptOutput.x);
+	return theta_m - m_ptOutput.theta;
+}
+
+bool GetIntersectionPointBetweenLines(MyPointPlane LineA, MyPointPlane LineB, MyPointPlane& ResultPoint) // Line Equation : Ax + By + C = 0
+{
+	float determinant = LineA.x * LineB.y - LineB.x * LineA.y;
+	if (determinant == 0)
+		return false;
+	ResultPoint.x = (LineB.theta * LineA.y - LineA.z * LineB.y) / determinant;
+	ResultPoint.y = (LineB.x * LineA.theta - LineA.x * LineB.theta) / determinant;
+	return true;
+}
+
+bool GetLineEquationGivenTwoPoints(MyPointPlane FirstPoint, MyPointPlane SecondPoint, MyPointPlane& ResultLine, bool Perpendicular = false)
+{
+	if (SecondPoint.x == FirstPoint.x && FirstPoint.y != SecondPoint.y)
+	{
+		ResultLine.x = 0; 
+		ResultLine.y = 1; 
+		ResultLine.theta = -FirstPoint.y; 
+		return true;
+	}
+	else if (SecondPoint.y == FirstPoint.y && FirstPoint.x != SecondPoint.x)
+	{
+		ResultLine.x = 1; 
+		ResultLine.y = 0; 
+		ResultLine.theta = -FirstPoint.x; 
+		return true;
+	}
+	else
+	{
+		float m = (SecondPoint.y - FirstPoint.y) / (SecondPoint.x - FirstPoint.x);
+		float slope = 0;
+		if (Perpendicular)
+			slope = -1 / m;
+		else
+			slope = m;
+		float b = FirstPoint.y - slope * FirstPoint.x;
+		ResultLine.x = -slope; // A
+		ResultLine.y = 1; // B
+		ResultLine.theta = -b; // C
+		return true;
+	}
+	return false;
+}
+
+MyPointPlane MoveForward(MyPointPlane pt, float dDistance)
+{
+	return (MyPointPlane) {
+		pt.x + dDistance * cos(pt.theta),
+		pt.y + dDistance * sin(pt.theta), 
+		0};
+}
+
+float DetermineOrientationNeeded()
+{
+	bool RightWheelMore = false;
+	float DegreeAngle = FindAngleBetweenVectorsGivenPoints(MoveForward(m_ptOutput, 10), 
+		m_ptDesired, &RightWheelMore);
+	if (!RightWheelMore)
+		DegreeAngle = -1 * DegreeAngle;
+	return DegreeAngle;
+}
+
+void NormalizeRPM()
+{
+	if (dRPM_Left != 0)
+		dRPM_Left = dRPM_Left / fabs(dRPM_Left) * _fmax(MINIMUM_RPM, _fmin(fabs(dRPM_Left), MAXIMUM_RPM));
+	if (dRPM_Right != 0)
+		dRPM_Right = dRPM_Right / fabs(dRPM_Right) * _fmax(MINIMUM_RPM, _fmin(fabs(dRPM_Right), MAXIMUM_RPM));
+}
+
+float VelocityToRPM(float pVelocity)
+{
+	return (pVelocity) * SECOND_TO_MINUTE / (WHEEL_DIAMETER * MATH_PI);
+}
+
+float RPMToVelocity(float pRPM)
+{
+	return (pRPM) * (WHEEL_DIAMETER * MATH_PI) / SECOND_TO_MINUTE;
+}
+
+bool PopPose(bool p_bLastDesiredPose=false)
+{
+	MyPointPlane EstimatedIMRPose;
+	EstimatedIMRPose.x = m_ptOutput.x + ((RPMToVelocity(dRPM_Left) + RPMToVelocity(dRPM_Right)) / 2) * cos(m_ptOutput.theta) * SamplingTime;
+	EstimatedIMRPose.y = m_ptOutput.x + ((RPMToVelocity(dRPM_Left) + RPMToVelocity(dRPM_Right)) / 2) * sin(m_ptOutput.theta) * SamplingTime;
+	EstimatedIMRPose.theta = m_ptOutput.theta + ((RPMToVelocity(dRPM_Right) - RPMToVelocity(dRPM_Left)) / AXEL_LENGTH) * SamplingTime;
+	MyPointPlane NextDesiredPose;
+	if (!p_bLastDesiredPose)
+		NextDesiredPose = m_ptPathData[CurrentGoal + 1]; 
+	else
+		NextDesiredPose = m_ptPathData[CurrentGoal - 1]; 
+	MyPointPlane PerpendicularLine;
+	if (GetLineEquationGivenTwoPoints(m_ptDesired, NextDesiredPose, PerpendicularLine, true))
+	{
+		MyPointPlane IMRTrajectoryLine;
+		GetLineEquationGivenTwoPoints(m_ptOutput, EstimatedIMRPose, IMRTrajectoryLine);
+		Point2D IntersectionPoint;
+		if (GetIntersectionPointBetweenLines(PerpendicularLine, IMRTrajectoryLine, IntersectionPoint))
+		{
+			if ((IntersectionPoint.x > m_ptOutput.x && IntersectionPoint.x < EstimatedIMRPose.x) ||
+				(IntersectionPoint.x > EstimatedIMRPose.x && IntersectionPoint.x < m_ptOutput.x))
+				return true;
+			if ((IntersectionPoint.y > m_ptOutput.y && IntersectionPoint.y < EstimatedIMRPose.y) ||
+				(IntersectionPoint.y > EstimatedIMRPose.y && IntersectionPoint.y < m_ptOutput.y))
+				return true;
+		}
+		return false;
+	}
+	return false;
+}
+
+void IgnoreDesiredPose()
+{
+	if (CurrenGoal < TotalNumberofGoals - 1)
+	{
+		if PopPose()
+		{
+			ChangeGoal();
+			dRPM_Left = VelocityToRPM(w_Comm);
+			dRPM_Right = VelocityToRPM(w_Comm);
+		}
+		return;
+	}
+	if PopPose(true)
+	{
+		GoalReached = true;
+		dRPM_Left = 0;
+		dRPM_Right = 0;
+		bPositionControl = false;
+		bOrientationControl = false;
+	}
+	return;
+}
+
+void MBITPositionControl()
+{
+	if (!bPositionControl)
+		return;
+	float PID_v = 0.0;
+	float PID_w = 0.0;
+	PID_linearVelocityControl(PID_v);
+	if (GoalReached)
+	{
+		bPositionControl = false;
+		bOrientationControl = false;
+		return;
+	}		
+	PID_AngularVelocityControl(PID_w);
+	v_Comm = PID_v;
+	w_Comm = PID_w;
+	dRPM_Left = VelocityToRPM(v_Comm - w_Comm);
+	dRPM_Right = VelocityToRPM(v_Comm + w_Comm);
+	IgnoreDesiredPose();
+	NormalizeRPM();
+}
+
+
+PIDController PID_LinearVelocity = {0.8, 0.004, 0.003};
+void PID_linearVelocityControl(float& PID_v)
+{
+	float d_error = sqrt(DifferenceNorm2(m_ptDesired, m_ptOutput));
+	if (d_error < ALLOWED_DISTANCE_ERROR)
+	{
+		d_error = 0.0;
+		if (CurrenGoal + 1 == TotalNumberofGoals)
+		{
+			dRPM_Left = 0;
+			dRPM_Right = 0;
+			bPositionControl = false;
+			bOrientationControl = false;
+			GoalReached = true;
+			return;
+		}
+		ChangeGoal();
+	}
+	PID_v = PIDFeedback(PID_LinearVelocity, d_error); // To be changed
+}
+
+PIDController PID_AngularVelocity = {5.7, 0.02, 0.01};
+void PID_AngularVelocityControl(float& PID_w)
+{
+	float d_error = DetermineOrientationNeeded();
+	if (fabs(e_theta) < ALLOWED_ANGLE_ERROR)
+		d_error = 0.0;
+	PID_w = PIDFeedback(PID_AngularVelocity, d_error); // To be changed
+}	
+
+
+
+
+////////////////////////////////////////////////
+void ResetWheel(HubMotorWheel* pWheel)
+{
+	pWheel->m_dTotalMileage = 0;
+	pWheel->m_dMeterPerStep = 1. / (3 * POLE_NUMBER) * CIRCLE_DIAMETER;
+	pWheel->m_motor.nPoleNumber = POLE_NUMBER;
+    pWheel->m_drive.m_dRPMLowpass = 0;
+    pWheel->m_drive.m_dRPMInstantaneous = 0;
+}
+
+void WheelControl(HubMotorWheel* pWheel, double dSpeedLinear, double dSpeedRotate)
+{
+	if (car == 0)
+		dSpeedCmd = dRPM_Left;
+	else
+		dSpeedCmd = -dRPM_Right;
+	GetLowpassDirectionalSpeed(&pWheel->m_drive);
+	MotorSetDirectionAndDuty(&pWheel->m_drive, 
+		PIDFeedback(&pWheel->m_drive.m_ctrl, dSpeedCmd, pWheel->m_drive.m_dRPMLowpass));
+}
+
+/////////////////////////////
+void InitPIDControllers()
+{
+	for (int i = 0; i < HUB_MOTORS; i++)
+		InitPIDController(&ITRICar.m_wheel[i].m_drive.m_ctrl);
+}
+
+void ResetMotorOutput()
+{
+	for (int i = 0; i < 2; i++)
+		ResetOutput(&ITRICar.m_wheel[i].m_drive);
+}
+
+void MotorSpeedControl(uint64_t nFastLoopCount)
+{
+	for (int i = 1; i >= 0; i--)
+	{
+		car = i;
+		WheelControl(&ITRICar.m_wheel[i],
+			ITRICar.m_dSpeedThrottle * (1 - _fabs(ITRICar.m_dRotateRatio)), ITRICar.m_dSpeedThrottle * ITRICar.m_dRotateRatio);
+		if (nFastLoopCount % 5000 == 0 &&
+			ITRICar.m_wheel[i].m_drive.m_dRPMLowpass < 1 && 
+			ITRICar.m_wheel[i].m_drive.m_bCommandForward)
+		{
+			ITRICar.m_wheel[i].m_drive.m_bCommandForward = false;
+			StepChangeDetected(&ITRICar.m_wheel[i].m_drive);
+			CBLDCMotorDrive *pDrive = &ITRICar.m_wheel[i].m_drive;
+			BLDC6StepControl(pDrive->m_duty.m_TIM, 
+			(pDrive->m_nBLDCStep[CURRENT_STATE] + 1 > 6) ? 1 : pDrive->m_nBLDCStep[CURRENT_STATE] + 1, 
+			pDrive->m_nPWMMode,
+			pDrive->m_nPWMTimerPeriod, pDrive->m_bCommandForward);
+		}
+	}
+}
+
+void ReadDIOControl()
+{
+	ITRICar.m_nWorkMode[CURRENT_STATE] = GPIO_ReadInputDataBit(GPIOE, GPIO_Pin_2);
+	ITRICar.m_nWorkMode[CURRENT_STATE] = MODE_AUTO;
+	if (ITRICar.m_nWorkMode[PREVIOUS_STATE] != ITRICar.m_nWorkMode[CURRENT_STATE])
+		InitPIDControllers();
+}
+
+void ControlPinInit(GPortPinArray ppa)
+{
+	ITRICar.m_ppaControl = ppa;
+	NuEnableInputPPA(ppa); 
+	ReadDIOControl();
+}
+
+void ReadHandleThreeMode(void)
+{
+	for (int i = 0; i < ITRICar.m_ppaControl.m_nPins; i++)
+		ITRICar.nReadModeNumberPin[i] = NuGetBit(ITRICar.m_ppaControl.m_gpp[i]);
+}
+
+////////////////////////////////////////
+int AD_VALUE_SIZE	= ADC_CHANNELS * 10;
+
+void CarPWMDisablePinInit(GPortPin gpp)
+{
+	PortPin pp = PP(gpp);
+	ITRICar.m_pwmDisable = gpp;
+	NuEnableOutputPP(gpp);
+	GPIO_SetBits(pp.m_typedef, pp.m_GPIO);
+}
+
+void ITRICarInit(bool bUseSteering, DWORD nPWMMode, int nPWMHz)
+{
+	mgrPWM.m_nHzSignal = nPWMHz;
+	mgrPWM.m_nModePWM = nPWMMode;
+	mgrPWM.m_nCallFunction = PWM_CALL_HALF_BLDC;
+	ITRICar.m_bUseSteering = bUseSteering;	
+	ITRICar.m_dSpeedThrottle = 0;
+	ITRICar.m_dRotateRatio = 0;
+	ITRICar.m_nWorkMode[CURRENT_STATE] = ITRICar.m_nWorkMode[PREVIOUS_STATE] = MODE_MANUAL;
+	for (int i = 0; i < ADC_CHANNELS; i++)
+	{
+		ITRICar.m_dLPFValue[i] = 0;
+		ResetWheel(&ITRICar.m_wheel[i]);
+	}
+	ITRICar.dADValueToSpeedCmd = (double) RPM_RANGE / ADVALUE_THROTTLE_RPM_SCALE;
+	ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_bInitStart = false;
+	ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_bInitStart = false;
+	CarPWMDisablePinInit(B2);
+	CarPWMDisablePinInit(C0);
+	GPIO_WriteBit(GPIOB, GPIO_Pin_2, Bit_RESET);
+	GPIO_WriteBit(GPIOC, GPIO_Pin_0, Bit_RESET);
+	BLDCMotorInit(&ITRICar.m_wheel[WHEEL_LEFT].m_drive, 1,
+		true, nPWMMode,
+		(GPortPinArray) {3, E8, E10, E12},  
+		B3, 
+		(PWMModule) {ST_TIMER_1, nPWMHz, (GPortPinArray) {7, A8, E11, A10, B12, A7, B14, B15}}, none,
+		VCLeftWheel);		
+	BLDCMotorInit(&ITRICar.m_wheel[WHEEL_RIGHT].m_drive, 2,
+		true, nPWMMode,			
+		(GPortPinArray) {3, E7, E9, E15},
+		B4, 
+		(PWMModule) {ST_TIMER_8, nPWMHz, (GPortPinArray) {7, C6, C7, C8, A6, A5, B0, B1}}, none,
+		VCRightWheel);
+	ITRICar.m_nPIDFastLoopSkip = FASTLOOP_HZ / ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_ctrl.m_nHzPID;
+	m_ptOutput = m_ptStart;
+	bPositionControl = true;
+	ChangeGoal();
+}
+
+void ReadAIOControl()
+{
+			
+}
+
+bool MotorBrake(bool bStop)
+{
+	if (bStop)
+		ResetMotorOutput();
+	return bStop;
+}
+
+///////////////////////////////////////////////
+void ITRICarMain(void)
+{
+	ITRICarInit(false /*use steering*/, MODE_BISYNC, 20000 /*Hz*/); 
+	ResetMotorOutput();
+	JsonWriteIntoJsonPair("ITRICar", "ON"); 
+}
+
+#define RECORD_ARRAY_SIZE 80000
+uint16_t RecordArrayCount = 1;
+int PrintfCount = 0;
+
+void ITRICarReportWrite(bool bReadWrite)
+{
+	char szText[MAX_JSON_VALUE];		
+	NuTimeReport(szText);
+	fprintf(USART_FILE,"{\"SetBeepValues\"=\"%s,%f,%f,%f,%f,%f,%f,%f\"}",
+		szText,
+		fLeftWheelVelocity,
+		fRightWheelVelocity,
+		m_ptOutput.x,
+		m_ptOutput.y,
+		m_ptDesired.x,
+		m_ptDesired.y,
+		m_ptOutput.theta);	
+}
+
+void ITRICarReport(void)
+{
+	if (!m_bSystemReportInited)
+	{
+		fprintf(USART_FILE, "{\"OpenCSVFile\" = \"D:/test123.csv\"}"); 
+		fprintf(USART_FILE, "{\"SetKeys\" = \"Time,LVelocity,RVelocity,PositionX,PositionY,GoalX,GoalY,ZRotation, CheckValue\"}"); 
+		m_bSystemReportInited = true;
+	}
+	ITRICarReportWrite(true);
+	if (RecordArrayCount == RECORD_ARRAY_SIZE || GoalReached)
+		ITRICarReportWrite(true);
+	if (PrintfCount == RECORD_ARRAY_SIZE)
+		ITRICarReportWrite(false);	
+}
+
+void MotorCalculateMileage(HubMotorWheel* pWheel)
+{
+	pWheel->m_dTotalMileage = pWheel->m_dMeterPerStep * pWheel->m_drive.m_nStepCount[CURRENT_STATE];
+}
+
+void ITRICarNormalLoop(void)
+{ 
+	ReadDIOControl();
+	if (!MotorBrake(ITRICar.m_nWorkMode[CURRENT_STATE] == MODE_MANUAL))
+		ReadAIOControl();
+	for (int i = 0; i < 2; i++)
+		MotorCalculateMileage(&ITRICar.m_wheel[i]);
+	ITRICar.m_nWorkMode[PREVIOUS_STATE] = ITRICar.m_nWorkMode[CURRENT_STATE];
+}
+
+void MotionBuiltInTest()
+{
+	PrintCounter++;
+	fLeftWheelVelocity =  (((double)ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nStepCount[CURRENT_STATE] - 
+	PreviouLVal) * 3 * MATH_PI * (WHEEL_DIAMETER / 2) / 45);				
+	fRightWheelVelocity = -1* ((double)ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nStepCount[CURRENT_STATE] - 
+	PreviouRVal) * 3 * MATH_PI * (WHEEL_DIAMETER / 2) / 45;				
+	m_ptOutput.x += (fLeftWheelVelocity + fRightWheelVelocity) / 2 * cos(m_ptOutput.theta) * SamplingTime;				
+	m_ptOutput.y += (fLeftWheelVelocity + fRightWheelVelocity) / 2 * sin(m_ptOutput.theta) * SamplingTime;				
+	m_ptOutput.theta += (fRightWheelVelocity - fLeftWheelVelocity) / AXEL_LENGTH * SamplingTime ;
+	SamplingTime = 0.2;	
+	if (m_ptOutput.theta >= 2 * MATH_PI)
+		m_ptOutput.theta = fabs(m_ptOutput.theta - 2 * MATH_PI);
+	else if (m_ptOutput.theta <= -2 * MATH_PI)
+		m_ptOutput.theta = fabs(m_ptOutput.theta + 2 * MATH_PI);
+	PreviouLVal = ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nStepCount[CURRENT_STATE];
+	PreviouRVal = ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nStepCount[CURRENT_STATE];
+	if (TakeControl)			
+	{
+		MBITPositionControl();
+		MBITOrientationControl();
+	}
+	else
+	{
+		dRPM_Left = 0;
+		dRPM_Right = 0;
+	}		
+	TakeControl = true;	
+}
+
+void MotionBuiltInTestNextPosition()
+{
+	if (RecordArrayCount > RECORD_ARRAY_SIZE)
+	{
+		dRPM_Left = 0;
+		dRPM_Right = 0;
+	}
+	RecordArrayCount++;
+}
+
+void ITRICarFastLoop(uint64_t nFastLoopCount)
+{
+	for (int i = 1; i >= 0; i--)
+	{
+		GetHallSensorState(&ITRICar.m_wheel[i].m_drive);
+		if (ITRICar.m_wheel[i].m_drive.m_nStepChangeCountDown >= 0)
+		{
+			if (ITRICar.m_wheel[i].m_drive.m_nStepChangeCountDown == 0)
+				DoChangeStepControl(&ITRICar.m_wheel[i].m_drive);
+			ITRICar.m_wheel[i].m_drive.m_nStepChangeCountDown--;
+		}
+	}
+	if (ITRICar.m_nWorkMode[CURRENT_STATE] == MODE_AUTO &&
+		nFastLoopCount % ITRICar.m_nPIDFastLoopSkip == 0)
+		MotorSpeedControl(nFastLoopCount); 
+	if (nFastLoopCount % 100 == 0 &&
+		RecordArrayCount < RECORD_ARRAY_SIZE)
+		MotionBuiltInTestNextPosition();
+	if (nFastLoopCount % 3333 == 0 &&
+		RecordArrayCount < RECORD_ARRAY_SIZE) 
+		MotionBuiltInTest();
+}
+
+void JITRIApp(DWORD param[])
+{
+	/*char szText[MAX_JSON_VALUE];
+	JsonPartition(param, szText);
+	m_ptDesired.x = Bound(1000, 0, Getdouble(szText, ","));
+	m_ptDesired.y = Bound(1000, 0, Getdouble(szText, ","));
+	m_ptDesired.theta = Bound(1000, 0, Getdouble(szText, "]"));
+	m_bSystemReportInited = false;*/
+}
