@@ -1,0 +1,403 @@
+#include "ITRI_APP.h"
+
+#define WHEEL_LEFT	0
+#define WHEEL_RIGHT	1
+#define MODE_MANUAL	0
+#define MODE_AUTO		1
+#define MODE_NUMBER_INDEX_ONE				1
+#define MODE_NUMBER_INDEX_TWO				2
+#define MODE_NUMBER_INDEX_THREE			3
+#define POLE_NUMBER		  		  			30
+#define CIRCLE_DIAMETER			  			81.68
+
+#define ADVALUE_THROTTLE_RPM_SCALE	100
+#define ADVALUE_THROTTLE_THRESHOLD	1500
+
+#define ADVALUE_STEERING_THRESHOLD	200
+#define RPM_RANGE										50
+#define AXEL_LENGTH									48.8 // [cm]
+
+int ADVALUE_STEERING_MIDDLE  = 2800;
+int ADVALUE_STEERING_RANGE = 10000; // corresponding to pure spin
+
+CITRICar ITRICar;
+
+////////////////////////////////////////////////
+void ResetWheel(HubMotorWheel* pWheel)
+{
+	pWheel->m_dTotalMileage = 0;
+	pWheel->m_dMeterPerStep = 1. / (3 * POLE_NUMBER) * CIRCLE_DIAMETER;
+	pWheel->m_motor.nPoleNumber = POLE_NUMBER;
+}
+
+double GetDirectionalSpeed(HubMotorWheel* pWheel)
+{
+	double dMinutes = (nMilliSecondCnt - pWheel->m_drive.m_nMillisecondCntPrevious ) / 60000.;
+	pWheel->m_drive.m_nMillisecondCntPrevious = nMilliSecondCnt;
+	double dRPM = (double) (pWheel->m_drive.m_nStepCount[CURRENT_STATE] - pWheel->m_drive.m_nStepCount[PREVIOUS_STATE]) / (3 * pWheel->m_motor.nPoleNumber) / dMinutes ;
+	pWheel->m_drive.m_nStepCount[PREVIOUS_STATE] = pWheel->m_drive.m_nStepCount[CURRENT_STATE];
+	return dRPM;
+}
+
+void WheelControl(HubMotorWheel* pWheel, double dSpeedLinear, double dSpeedRotate)
+{
+	double dSpeedCmd = pWheel->m_drive.m_nMotorForwardDirection * 
+		(dSpeedLinear - pWheel->m_drive.m_nMotorForwardDirection * dSpeedRotate);
+	//dSpeedCmd = 300 * 30 / 8;
+	MotorSetDirectionAndDuty(&pWheel->m_drive, 
+		PIDFeedback(&pWheel->m_drive.m_ctrl, dSpeedCmd, GetDirectionalSpeed(pWheel)));
+}
+
+/////////////////////////////
+
+void InitPIDControllers()
+{
+	for (int i = 0; i < HUB_MOTORS; i++)
+		InitPIDController(&ITRICar.m_wheel[i].m_drive.m_ctrl);
+}
+
+void ResetMotorOutput()
+{
+	for (int i = 0; i < 2; i++)
+		ResetOutput(&ITRICar.m_wheel[i].m_drive);
+}
+
+void MotorSpeedControl(void)
+{
+	for (int i = 0; i < 2; i++)
+	{
+		WheelControl(&ITRICar.m_wheel[i],
+			ITRICar.m_dSpeedThrottle * (1 - _fabs(ITRICar.m_dRotateRatio)), ITRICar.m_dSpeedThrottle * ITRICar.m_dRotateRatio);
+	}
+}
+
+void ReadDIOControl()
+{
+	ITRICar.m_nWorkMode[CURRENT_STATE] = GPIO_ReadInputDataBit(GPIOE, GPIO_Pin_2);
+	ITRICar.m_nWorkMode[CURRENT_STATE] = MODE_AUTO;
+	if (ITRICar.m_nWorkMode[PREVIOUS_STATE] != ITRICar.m_nWorkMode[CURRENT_STATE])
+		InitPIDControllers();
+}
+
+void ControlPinInit(GPortPinArray ppa)
+{
+	ITRICar.m_ppaControl = ppa;
+	NuEnableInputPPA(ppa); 
+	ReadDIOControl();
+}
+
+void ReadHandleThreeMode(void)
+{
+	for (int i = 0; i < ITRICar.m_ppaControl.m_nPins; i++)
+		ITRICar.nReadModeNumberPin[i] = NuGetBit(ITRICar.m_ppaControl.m_gpp[i]);
+}
+
+////////////////////////////////////////
+int AD_VALUE_SIZE	= ADC_CHANNELS * 10;
+
+void CarPWMDisablePinInit(GPortPin gpp)
+{
+	PortPin pp = PP(gpp);
+	ITRICar.m_pwmDisable = gpp;
+	NuEnableOutputPP(gpp);
+	GPIO_SetBits(pp.m_typedef, pp.m_GPIO);
+}
+/*
+void TwinMotorPWMInit(uint32_t nPortTimer, int nPWMHz)
+{
+	NuEnableRCCClock(nPortTimer);
+	NuEnableTIMCC_NVIC(nPortTimer - ST_TIMER_1 + ST_PWM_1);
+	NuEnableAFPPA((GPortPinArray) {2,
+		A8,  	// TIM1_CH1
+		E11}, // TIM1_CH2
+		GPIO_AF_TIM1);
+	ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nPWMTimerPeriod = ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nPWMTimerPeriod = 
+		NuPWMChannelConfig(nPortTimer, nPWMHz, 2, 0);
+	NuPWMOutputEnable(nPortTimer);
+	for (int i = 0; i < 2; i++)
+		ITRICar.m_wheel[i].m_drive.m_duty.m_TIM = GetTIM_TypeDef(nPortTimer);
+}
+*/
+uint32_t time = 0;
+uint16_t rpm = 10;
+uint16_t sec = 0;
+void ITRICarInit(bool bUseSteering, DWORD nPWMMode, int nPWMHz)
+{
+	mgrPWM.m_nHzSignal = nPWMHz;
+	mgrPWM.m_nModePWM = nPWMMode;
+	mgrPWM.m_nCallFunction = PWM_CALL_HALF_BLDC;
+	ITRICar.m_bUseSteering = bUseSteering;	
+	ITRICar.m_dSpeedThrottle = 0;
+	ITRICar.m_dRotateRatio = 0;
+	ITRICar.m_nWorkMode[CURRENT_STATE] = ITRICar.m_nWorkMode[PREVIOUS_STATE] = MODE_MANUAL;
+	for (int i = 0; i < ADC_CHANNELS; i++)
+	{
+		ITRICar.m_dLPFValue[i] = 0;
+		ResetWheel(&ITRICar.m_wheel[i]);
+	}
+	/*
+	switch (nPWMMode)
+	{
+		case MODE_EXTERN_DRIVER:
+			TwinMotorPWMInit(ST_TIMER_1, nPWMHz);
+			break;
+	}
+	*/
+	ControlPinInit((GPortPinArray) {1, E2});//ControlPinInit((GPortPinArray) {3, E2, E3, E4});
+	NuOPModeEnableADC(ST_nCH_1ADC, 43750, -AD_VALUE_SIZE, (GPortPinArray) {3, A1, A2, A3});
+	ITRICar.dADValueToSpeedCmd = (double) RPM_RANGE / ADVALUE_THROTTLE_RPM_SCALE;
+	ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_bInitStart = false;
+	ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_bInitStart = false;
+	CarPWMDisablePinInit(B2);
+	CarPWMDisablePinInit(C0);
+		GPIO_WriteBit(GPIOB, GPIO_Pin_2, Bit_RESET);
+		GPIO_WriteBit(GPIOC, GPIO_Pin_0, Bit_RESET);
+	BLDCMotorInit(&ITRICar.m_wheel[WHEEL_LEFT].m_drive, 1,
+		true, nPWMMode,
+		(GPortPinArray) {3, E8, E10, E12},  
+		B3, 
+		(PWMModule) {ST_TIMER_1, nPWMHz, (GPortPinArray) {7, A8, E11, A10, B12, A7, B14, B15}}, none,
+		//(PIDController) {1.25, 0.25, 0.79, 250});
+		(PIDController) {1.3, 0.23, 0.79, 250});		
+	BLDCMotorInit(&ITRICar.m_wheel[WHEEL_RIGHT].m_drive, 2,
+		false, nPWMMode,
+		(GPortPinArray) {3, E7, E9, E15},
+		B4, 
+		(PWMModule) {ST_TIMER_8, nPWMHz, (GPortPinArray) {7, C6, C7, C8, A6, A5, B0, B1}}, none,
+		//(PIDController) {1.0, 0.23, 0.79, 250});
+		(PIDController) {1.25, 0.25, 0.79, 250});
+	ITRICar.m_nPIDFastLoopSkip = FASTLOOP_HZ / ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_ctrl.m_nHzPID;
+}
+
+char szText[MAX_JSON_VALUE];
+//#define BIF		
+#define CHT
+void ReadAIOControl()
+{
+#ifdef BIF
+	
+	if (ITRICar.m_nWorkMode[CURRENT_STATE] != MODE_AUTO)
+		return;
+	for (int j = 0; j < ADC_CHANNELS; j++)
+	{
+		for (int i = j; i < AD_VALUE_SIZE; i += ADC_CHANNELS)
+			ITRICar.m_dLPFValue[j] += (mgrADC.m_dmaMemory0Base[0][i] - ITRICar.m_dLPFValue[j]) * 0.1;
+	}
+	
+	/*
+	if (ITRICar.m_nWorkMode[CURRENT_STATE] != MODE_AUTO)
+		return;
+	for (int j = 0; j < ADC_CHANNELS; j++)
+	{
+		for (int i = j; i < AD_VALUE_SIZE; i += ADC_CHANNELS){
+			double gap = mgrADC.m_dmaMemory0Base[0][i] - ITRICar.m_dLPFValue[j];
+			if((gap > 20) || (gap < -20))
+				ITRICar.m_dLPFValue[j] += gap * 0.09;
+		}
+	}
+	*/
+	//if (!ITRICar.m_bUseSteering)
+		//ITRICar.m_dLPFValue[ADC_STEERING] = 0;
+#endif
+	//ITRICar.m_dLPFValue[ADC_THROTTLE] = 1111;
+	
+#ifdef BIF
+	fprintf(USART_FILE,"{\"SetBeepValues\"=\"%s,%f,%f\"}",
+				szText,
+				ITRICar.m_dLPFValue[ADC_THROTTLE],
+				ITRICar.m_dLPFValue[ADC_STEERING]);
+	/*
+	fprintf(USART_FILE,"{\"SetBeepValues\"=\"%s,%d,%d\"}",
+			szText,
+			mgrADC.m_dmaMemory0Base[0][2],
+			mgrADC.m_dmaMemory0Base[0][3]);
+	*/
+#endif
+	//speedcmd = (x - 1500) / 8 * 30 / 2
+	//throttle = speedcmd / 30 * 16 + 1500
+	time++;
+	//if (10<=rpm && rpm <= 20)
+	//{
+	//rpm = rpm + 1;
+	//}if (time == 20 && 10<=rpm && rpm <= 20)
+#ifdef CHT
+	if (time == 20 )
+	{
+		sec++;	
+		time = 0;
+		if (sec > 0 && sec < 8z && rpm < 30)
+		{
+			rpm = rpm + 1;
+		}
+		
+		if (sec > 17 && sec < 22 && rpm < 30)
+		{
+			rpm = rpm - 1;
+		}
+	}
+	
+	//if (time < 20)
+	//{
+		//rpm = rpm + 2;
+		//GPIO_WriteBit(GPIOB, GPIO_Pin_2, Bit_SET);
+		//GPIO_WriteBit(GPIOC, GPIO_Pin_0, Bit_SET);
+	//}	
+	//if (sec > 30 && sec < 40 && rpm > 15)
+		//rpm = rpm - 6;
+	ITRICar.m_dLPFValue[ADC_THROTTLE] = rpm * 2 + 1500;
+#endif
+	ITRICar.m_dSpeedThrottle = ITRICar.m_dLPFValue[ADC_THROTTLE] > ADVALUE_THROTTLE_THRESHOLD? 
+		(ITRICar.m_dLPFValue[ADC_THROTTLE] - ADVALUE_THROTTLE_THRESHOLD) * ITRICar.dADValueToSpeedCmd: 0;
+	ITRICar.m_dRotateRatio = !ITRICar.m_bUseSteering? 0: (_fabs(ITRICar.m_dLPFValue[ADC_STEERING] - ADVALUE_STEERING_MIDDLE) >= ADVALUE_STEERING_THRESHOLD? 
+		(ITRICar.m_dLPFValue[ADC_STEERING] - ADVALUE_STEERING_MIDDLE) / ADVALUE_STEERING_RANGE: 0);		
+}
+
+bool MotorBrake(bool bStop)
+{
+	if (bStop)
+		ResetMotorOutput();
+	//NuSetBit(ITRICar.m_pwmDisable, bStop);
+	return bStop;
+}
+
+///////////////////////////////////////////////
+void ITRICarMain(void)
+{
+	//	ITRICarInit(true /*use steering*/, MODE_EXTERN_DRIVER, 10000 /*Hz*/); 
+	ITRICarInit(false /*use steering*/, MODE_BISYNC, 20000 /*Hz*/); 
+	ResetMotorOutput();
+	JsonWriteIntoJsonPair("ITRICar", "ON"); 
+}
+
+#ifdef CHT
+#define RECORD_ARRAY_SIZE	66
+bool bPrintRecordArray = true;
+uint16_t RecordArrayCount = 0;
+int nRecordStepCountLeftArray[RECORD_ARRAY_SIZE] = {0};
+int nRecordStepCountRightArray[RECORD_ARRAY_SIZE] = {0};
+int PrintfCount = 0;
+#endif
+
+void ITRICarReportWrite(bool bReadWrite)
+{
+	NuTimeReport(szText);
+	/*
+	fprintf(USART_FILE, 
+		ITRICar.m_nWorkMode[CURRENT_STATE] == MODE_AUTO? "{\"SetBeepValues\"=\"%s,%d,%d,%.2f,%.2f,%d,%d\"}":"{\"SetValues\"=\"%s,%d,%d,%.2f,%.2f\"}",
+		szText,
+		ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nStepCount[CURRENT_STATE],
+		ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nStepCount[CURRENT_STATE],
+		ITRICar.m_dLPFValue[ADC_THROTTLE],
+		ITRICar.m_dLPFValue[ADC_STEERING],
+		ADVALUE_STEERING_MIDDLE,
+		ADVALUE_STEERING_RANGE);
+	*/
+#ifdef CHT
+	//if (RecordArrayCount == RECORD_ARRAY_SIZE && bPrintRecordArray)
+	if (bReadWrite && bPrintRecordArray)
+	{
+		//TIM_Cmd(TIM5,DISABLE);
+		//TIM_Cmd(TIM7,DISABLE);
+		GPIO_WriteBit(GPIOB, GPIO_Pin_2, Bit_SET);
+		GPIO_WriteBit(GPIOC, GPIO_Pin_0, Bit_SET);
+		/*
+		while (PrintfCount < RECORD_ARRAY_SIZE)
+		{
+			fprintf(USART_FILE,"{\"SetBeepValues\"=\"%s,%d,%d,%d\"}",
+				szText,
+				PrintfCount,
+				nRecordStepCountLeftArray[PrintfCount],
+				nRecordStepCountRightArray[PrintfCount]);
+			PrintfCount++;
+		}
+		if (PrintfCount == RECORD_ARRAY_SIZE)
+		{
+			bPrintRecordArray = false;
+			fprintf(USART_FILE,"{ok}");
+		}
+		*/
+	}
+#endif
+}
+
+void ITRICarReport(void)
+{
+	if (!m_bSystemReportInited)
+	{
+		fprintf(USART_FILE, "{\"OpenCSVFile\" = \"D:/test123.csv\"}"); 
+		//fprintf(USART_FILE, "{\"SetKeys\" = \"Time,Left Wheel,Right Wheel,Throttle,Steering,STADCMID,STADCICR\"}"); 
+		m_bSystemReportInited = true;
+	}
+	if (RecordArrayCount == RECORD_ARRAY_SIZE)
+		ITRICarReportWrite(true);
+	if (PrintfCount == RECORD_ARRAY_SIZE)
+		ITRICarReportWrite(false);
+	/*
+	fprintf(USART_FILE,"{%d,%d,%d}",
+				GPIO_ReadInputDataBit(GPIOE,GPIO_Pin_8),
+				GPIO_ReadInputDataBit(GPIOE,GPIO_Pin_10),
+				GPIO_ReadInputDataBit(GPIOE,GPIO_Pin_12));
+	*/
+}
+
+void MotorCalculateMileage(HubMotorWheel* pWheel)
+{
+	pWheel->m_dTotalMileage = pWheel->m_dMeterPerStep * pWheel->m_drive.m_nStepCount[CURRENT_STATE];
+}
+
+void ITRICarNormalLoop(void)
+{ 
+	ReadDIOControl();
+	if (!MotorBrake(ITRICar.m_nWorkMode[CURRENT_STATE] == MODE_MANUAL))
+		ReadAIOControl();
+	for (int i = 0; i < 2; i++)
+		MotorCalculateMileage(&ITRICar.m_wheel[i]);
+	ITRICar.m_nWorkMode[PREVIOUS_STATE] = ITRICar.m_nWorkMode[CURRENT_STATE];
+}
+
+bool FileInitiated = false;
+void ITRICarFastLoop(uint64_t nFastLoopCount)
+{
+	for (int i = 0; i < 2; i++)
+		GetHallSensorState(&ITRICar.m_wheel[i].m_drive);
+	if (ITRICar.m_nWorkMode[CURRENT_STATE] == MODE_AUTO &&
+			nFastLoopCount % ITRICar.m_nPIDFastLoopSkip == 0)
+		MotorSpeedControl(); 
+#ifdef CHT
+	if (nFastLoopCount % 3333 == 0 && RecordArrayCount < RECORD_ARRAY_SIZE)
+	{
+		/*
+		fprintf(USART_FILE,"{%d,%d}",
+				//RecordArrayCount,
+				ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nStepCount[CURRENT_STATE],
+				ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nStepCount[CURRENT_STATE]);
+		if (!FileInitiated)
+		{
+			fprintf(USART_FILE, "{\"OpenCSVFile\" = \"D:/test123.csv\"}"); 
+			FileInitiated = true;
+		}
+		*/
+#ifdef CHT
+	
+		fprintf(USART_FILE,"{\"SetBeepValues\"=\"%d,%d\"}",
+				//szText,
+				ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nStepCount[CURRENT_STATE],
+				ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nStepCount[CURRENT_STATE]);	
+		RecordArrayCount++;
+	
+#endif		
+		//nRecordStepCountLeftArray[RecordArrayCount] = ITRICar.m_wheel[WHEEL_LEFT].m_drive.m_nStepCount[CURRENT_STATE];
+		//nRecordStepCountRightArray[RecordArrayCount++] = ITRICar.m_wheel[WHEEL_RIGHT].m_drive.m_nStepCount[CURRENT_STATE];
+	}
+
+#endif
+}
+
+void JITRIApp(DWORD param[])
+{
+	char szText[MAX_JSON_VALUE];
+	JsonPartition(param, szText);
+	ADVALUE_STEERING_MIDDLE = Bound(3500, 1600, Getint32(szText, ","));
+	ADVALUE_STEERING_RANGE = Bound(100000, 5000, Getint32(szText, ","));
+	m_bSystemReportInited = false;
+}
